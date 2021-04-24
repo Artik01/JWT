@@ -25,10 +25,12 @@ type UserData struct {
 type User struct {
 	ID int
 	login string
+	secret string
 	passwordHash [sha256.Size]byte
 }
 
-type Date struct {
+type Data struct {
+	Login string	`json:"name"`
 	ExpDate int64	`json:"exp"`
 }
 
@@ -65,21 +67,12 @@ func loginHandler(w http.ResponseWriter, req *http.Request) {
 
 func createToken(user User) string {
 	now := time.Now()
-	Header:=
-`{
-	"alg":"HS256",
-	"typ":"JWT"
-}`
+	Header:=`{"alg":"HS256","typ":"JWT"}`
 	
-	Payload:=
-`{
-	"name":"`+user.login+`",
-	"sub":"`+fmt.Sprint(user.ID)+`",
-	"exp":`+fmt.Sprint(now.Add(time.Hour).Unix())+`
-}`
+	Payload:=`{"name":"`+user.login+`","sub":"`+fmt.Sprint(user.ID)+`","exp":`+fmt.Sprint(now.Add(time.Hour).Unix())+`}`
 	token:=Encoder.EncodeToString([]byte(Header))+"."+Encoder.EncodeToString([]byte(Payload))
 	
-	mac:=hmac.New(sha256.New,[]byte("Testtest"))//TODO:....................................................
+	mac:=hmac.New(sha256.New,[]byte(user.secret))
 	mac.Write([]byte(token))
 	sum:=mac.Sum(nil)
 	token+="."+Encoder.EncodeToString(sum)
@@ -96,6 +89,18 @@ func getHandler(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(204)
 	} else if req.Method == "GET" {
 		token:= req.Header.Get("Token")
+		
+		indx:=strings.LastIndex(token,".")
+		var secret string
+		for _, u := range userDB {
+			if u.login==GetLogin(token) {
+				secret = u.secret
+			}
+		}
+		if !ValidMAC([]byte(token[:indx]),[]byte(token[indx+1:]),[]byte(secret)) {
+			w.WriteHeader(401)
+			return
+		}
 		
 		for _, t := range TokenDB {
 			if t == token {
@@ -114,15 +119,33 @@ func getHandler(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func ValidMAC(message, messageMAC, key []byte) bool {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(message)
+	expectedMAC := mac.Sum(nil)
+	return hmac.Equal(messageMAC, expectedMAC)
+}
+
 func GetExp(t string) time.Time {
 	t1:=strings.Index(t,".")
 	t2:=strings.LastIndex(t,".")
 	
 	PayloadDecoded:=t[t1+1:t2]
 	str, _:=Encoder.DecodeString(PayloadDecoded)
-	var d Date
+	var d Data
 	json.Unmarshal(str,&d)
 	return time.Unix(d.ExpDate,0)
+}
+
+func GetLogin(t string) string {
+	t1:=strings.Index(t,".")
+	t2:=strings.LastIndex(t,".")
+	
+	PayloadDecoded:=t[t1+1:t2]
+	str, _:=Encoder.DecodeString(PayloadDecoded)
+	var d Data
+	json.Unmarshal(str,&d)
+	return d.Login
 }
 
 func DeleteToken(token string) {
@@ -141,7 +164,7 @@ func DeleteToken(token string) {
 
 func main() {
 	Mutex <- 1
-	userDB = append(userDB, User{1, "admin", sha256.Sum256([]byte("Test"))})
+	userDB = append(userDB, User{1, "admin", "secretword", sha256.Sum256([]byte("Test"))})
 	http.HandleFunc("/login", loginHandler)
 	http.HandleFunc("/data", getHandler)
 	
